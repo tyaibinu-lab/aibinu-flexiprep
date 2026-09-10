@@ -1,16 +1,34 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+
+import Home from "./pages/public/Home.jsx";
+import Login from "./pages/public/Login.jsx";
+
+import StudentDashboard from "./pages/student/Dashboard.jsx";
+import TeacherDashboard from "./pages/teacher/Dashboard.jsx";
+import AdminDashboard from "./pages/admin/Dashboard.jsx";
+
 function App() {
   return (
-    <main>
-      <h1>AIBINU Flexiprep</h1>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
 
-      <p>
-        AI-powered examination preparation and student management platform.
-      </p>
+        <Route path="/student" element={<StudentDashboard />} />
+        <Route path="/teacher" element={<TeacherDashboard />} />
+        <Route path="/admin" element={<AdminDashboard />} />
 
-      <p>
-        Development environment initialized successfully.
-      </p>
-    </main>
+        <Route
+          path="*"
+          element={
+            <main>
+              <h1>404</h1>
+              <p>Page not found.</p>
+            </main>
+          }
+        />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
