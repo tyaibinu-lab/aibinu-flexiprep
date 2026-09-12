@@ -200,14 +200,15 @@ export default async function handler(req, res) {
     const formula =
       `LOWER({Login Identifier})=LOWER(${escapeFormulaString(identifier)})`;
 
-    const result = await airtableList(
-      config.airtable.tables.authUsers,
-      {
-        filterByFormula: formula,
-        maxRecords: 1,
-      }
-    );
+    const query = new URLSearchParams({
+  filterByFormula: formula,
+  maxRecords: "1",
+}).toString();
 
+const result = await airtableList(
+  config.airtable.tables.authUsers,
+  query
+);
     const userRecord = result?.records?.[0] ?? null;
 
     if (!userRecord) {

@@ -1,9 +1,13 @@
-import { clearSessionCookie } from "../lib/_auth.js";
+﻿import { clearSessionCookie } from "../lib/_auth.js";
 
-export default function handler(req, res) {
+function send(res, status, body) {
+  return res.status(status).json(body);
+}
+
+export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
-    return res.status(405).json({
+    return send(res, 405, {
       error: "Method not allowed.",
     });
   }
@@ -11,14 +15,15 @@ export default function handler(req, res) {
   try {
     clearSessionCookie(res);
 
-    return res.status(200).json({
-      success: true,
+    return send(res, 200, {
+      ok: true,
+      message: "Logged out successfully.",
     });
   } catch (error) {
     console.error("Logout error:", error);
 
-    return res.status(500).json({
-      error: "Logout service temporarily unavailable.",
+    return send(res, 500, {
+      error: "Authentication service temporarily unavailable.",
     });
   }
 }

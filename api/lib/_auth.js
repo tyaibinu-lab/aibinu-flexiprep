@@ -266,16 +266,36 @@ export function requireRole(req, res, role) {
 }
 
 export function setSessionCookie(res, token) {
+  const isProduction =
+    process.env.APP_ENV === "production" ||
+    process.env.NODE_ENV === "production";
+
+  const cookieName = isProduction
+    ? "__Host-aibinu_session"
+    : "aibinu_session";
+
+  const secure = isProduction ? "; Secure" : "";
+
   res.setHeader(
     "Set-Cookie",
-    `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`
+    `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly${secure}; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`
   );
 }
 
 export function clearSessionCookie(res) {
+  const isProduction =
+    process.env.APP_ENV === "production" ||
+    process.env.NODE_ENV === "production";
+
+  const cookieName = isProduction
+    ? "__Host-aibinu_session"
+    : "aibinu_session";
+
+  const secure = isProduction ? "; Secure" : "";
+
   res.setHeader(
     "Set-Cookie",
-    `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
+    `${cookieName}=; Path=/; HttpOnly${secure}; SameSite=Lax; Max-Age=0`
   );
 }
 
