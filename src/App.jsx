@@ -16,7 +16,7 @@ function App() {
         <Route path="/login" element={<Login />} />
 
         <Route path="/student" element={<StudentDashboard />} />
-        <Route path="/teacher" element={<TeacherDashboard />} />
+        <Route path="/teacher" element={<ProtectedRoute allowedRoles={["teacher"]}><TeacherDashboard /></ProtectedRoute>} />
 
         <Route
           path="/admin"
@@ -42,3 +42,4 @@ function App() {
 }
 
 export default App;
+
