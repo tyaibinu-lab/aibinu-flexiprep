@@ -33,7 +33,7 @@ export default function Login() {
       }
 
       setStatus(
-        `Login successful. Authenticated as ${data.role}.`
+        `Login successful. Authenticated as ${data.user.role}.`
       );
 
       setPassword("");
