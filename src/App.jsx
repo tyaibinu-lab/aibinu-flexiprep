@@ -6,6 +6,7 @@ import Login from "./pages/public/Login.jsx";
 import StudentDashboard from "./pages/student/Dashboard.jsx";
 import TeacherDashboard from "./pages/teacher/Dashboard.jsx";
 import AdminDashboard from "./pages/admin/Dashboard.jsx";
+import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 
 function App() {
   return (
@@ -16,7 +17,15 @@ function App() {
 
         <Route path="/student" element={<StudentDashboard />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
-        <Route path="/admin" element={<AdminDashboard />} />
+
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="*"
