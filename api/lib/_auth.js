@@ -1,7 +1,13 @@
 import crypto from "node:crypto";
 import { getConfig } from "./config.js";
 
-const COOKIE_NAME = "__Host-aibinu_session";
+const IS_PRODUCTION =
+  process.env.APP_ENV === "production" ||
+  process.env.NODE_ENV === "production";
+
+const COOKIE_NAME = IS_PRODUCTION
+  ? "__Host-aibinu_session"
+  : "aibinu_session";
 const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 const ISSUER = "aibinu-flexiprep";

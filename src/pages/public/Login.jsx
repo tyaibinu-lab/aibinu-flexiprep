@@ -13,6 +13,12 @@ const ROLE_CONFIG = {
     description: "Manage teaching activities, notes, assessments and students.",
     redirect: "/teacher",
   },
+  reviewer: {
+    label: "REVIEWER",
+    portal: "Reviewer Portal",
+    description: "Review and approve submitted academic content",
+    redirect: "/reviewer",
+  },
   student: {
     label: "STUDENT",
     portal: "Student Portal",

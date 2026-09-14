@@ -1,10 +1,12 @@
 ﻿import crypto from "node:crypto";
+
 import { getConfig } from "../lib/config.js";
 import {
   airtableList,
   airtableGet,
   airtableUpdate,
 } from "../lib/airtable.js";
+
 import {
   createSessionToken,
   setSessionCookie,
@@ -13,16 +15,27 @@ import {
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
+const ALLOWED_ROLES = [
+  "student",
+  "teacher",
+  "reviewer",
+  "admin",
+];
+
 function send(res, status, body) {
   res.status(status).json(body);
 }
 
 function normalizeIdentifier(value) {
-  return String(value ?? "").trim().toLowerCase();
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
 }
 
 function verifyPassword(password, encodedHash) {
-  if (!encodedHash || typeof encodedHash !== "string") return false;
+  if (!encodedHash || typeof encodedHash !== "string") {
+    return false;
+  }
 
   const parts = encodedHash.split("$");
 
@@ -55,11 +68,17 @@ function verifyPassword(password, encodedHash) {
         N,
         r,
         p,
-        maxmem: Math.max(128 * N * r + 1024, 32 * 1024 * 1024),
+        maxmem: Math.max(
+          128 * N * r + 1024,
+          32 * 1024 * 1024
+        ),
       }
     );
 
-    const expected = Buffer.from(storedHash, "base64url");
+    const expected = Buffer.from(
+      storedHash,
+      "base64url"
+    );
 
     return (
       derived.length === expected.length &&
@@ -73,11 +92,16 @@ function verifyPassword(password, encodedHash) {
 function isLocked(fields) {
   const lockedUntil = fields?.["Locked Until"];
 
-  if (!lockedUntil) return false;
+  if (!lockedUntil) {
+    return false;
+  }
 
   const timestamp = Date.parse(lockedUntil);
 
-  return Number.isFinite(timestamp) && timestamp > Date.now();
+  return (
+    Number.isFinite(timestamp) &&
+    timestamp > Date.now()
+  );
 }
 
 function escapeFormulaString(value) {
@@ -89,7 +113,10 @@ function getLinkedRecordId(value) {
     return value[0] || null;
   }
 
-  if (typeof value === "string" && value.trim()) {
+  if (
+    typeof value === "string" &&
+    value.trim()
+  ) {
     return value.trim();
   }
 
@@ -99,7 +126,9 @@ function getLinkedRecordId(value) {
 async function resolveStudentId(config, fields) {
   const recordId = getLinkedRecordId(fields?.Student);
 
-  if (!recordId) return null;
+  if (!recordId) {
+    return null;
+  }
 
   try {
     const record = await airtableGet(
@@ -127,7 +156,10 @@ async function resolveTeacherId(config, fields) {
 async function updateLoginFailure(config, userRecord) {
   const fields = userRecord?.fields ?? {};
 
-  const currentAttempts = Number(fields["Failed Attempts"] ?? 0);
+  const currentAttempts = Number(
+    fields["Failed Attempts"] ?? 0
+  );
+
   const failedAttempts = Number.isFinite(currentAttempts)
     ? currentAttempts + 1
     : 1;
@@ -138,7 +170,8 @@ async function updateLoginFailure(config, userRecord) {
 
   if (failedAttempts >= MAX_FAILED_ATTEMPTS) {
     update["Locked Until"] = new Date(
-      Date.now() + LOCKOUT_MINUTES * 60 * 1000
+      Date.now() +
+        LOCKOUT_MINUTES * 60 * 1000
     ).toISOString();
   }
 
@@ -149,7 +182,7 @@ async function updateLoginFailure(config, userRecord) {
       update
     );
   } catch {
-    // Do not expose internal persistence errors during authentication.
+    // Do not expose persistence errors during authentication.
   }
 }
 
@@ -165,51 +198,68 @@ async function resetLoginFailure(config, userRecord) {
       }
     );
   } catch {
-    // Login should not fail merely because audit metadata could not be updated.
+    // Authentication should not fail because audit metadata failed.
   }
 }
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
+
     return send(res, 405, {
       error: "Method not allowed.",
     });
   }
 
+  // Authentication responses should not be cached.
+  res.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
   try {
     const config = getConfig();
 
     const body =
-      req.body && typeof req.body === "object"
+      req.body &&
+      typeof req.body === "object"
         ? req.body
         : {};
 
     const identifier = normalizeIdentifier(
-      body.identifier ?? body.loginIdentifier ?? body.username
+      body.identifier ??
+        body.loginIdentifier ??
+        body.username
     );
 
-    const password = String(body.password ?? "");
+    const password = String(
+      body.password ?? ""
+    );
 
     if (!identifier || !password) {
       return send(res, 400, {
-        error: "Login identifier and password are required.",
+        error:
+          "Login identifier and password are required.",
       });
     }
 
     const formula =
-      `LOWER({Login Identifier})=LOWER(${escapeFormulaString(identifier)})`;
+      `LOWER({Login Identifier})=LOWER(${escapeFormulaString(
+        identifier
+      )})`;
 
     const query = new URLSearchParams({
-  filterByFormula: formula,
-  maxRecords: "1",
-}).toString();
+      filterByFormula: formula,
+      maxRecords: "1",
+    }).toString();
 
-const result = await airtableList(
-  config.airtable.tables.authUsers,
-  query
-);
-    const userRecord = result?.records?.[0] ?? null;
+    const result = await airtableList(
+      config.airtable.tables.authUsers,
+      query
+    );
+
+    const userRecord =
+      result?.records?.[0] ?? null;
 
     if (!userRecord) {
       return send(res, 401, {
@@ -219,73 +269,135 @@ const result = await airtableList(
 
     const fields = userRecord.fields ?? {};
 
+    // Account lockout check.
     if (isLocked(fields)) {
       return send(res, 401, {
         error: "Invalid login credentials.",
       });
     }
 
-    const status = String(fields.Status ?? "").trim().toLowerCase();
+    // Account status check.
+    const status = String(
+      fields.Status ?? ""
+    )
+      .trim()
+      .toLowerCase();
 
-    if (status && status !== "active") {
+    if (
+      status &&
+      status !== "active"
+    ) {
       return send(res, 401, {
         error: "Invalid login credentials.",
       });
     }
 
+    // Password verification.
     const passwordValid = verifyPassword(
       password,
       fields["Password Hash"]
     );
 
     if (!passwordValid) {
-      await updateLoginFailure(config, userRecord);
+      await updateLoginFailure(
+        config,
+        userRecord
+      );
 
       return send(res, 401, {
         error: "Invalid login credentials.",
       });
     }
 
-    const role = String(fields.Role ?? "").trim().toLowerCase();
+    // Normalize and validate role.
+    const role = String(
+      fields.Role ?? ""
+    )
+      .trim()
+      .toLowerCase();
 
-    if (!["student", "teacher", "reviewer", "admin"].includes(role)) {
+    if (!ALLOWED_ROLES.includes(role)) {
       return send(res, 403, {
-        error: "Account role is not configured correctly.",
+        error:
+          "Account role is not configured correctly.",
       });
     }
+
+    /*
+     * ROLE LINKING
+     *
+     * Student:
+     *   Must be linked to a Student record.
+     *
+     * Teacher:
+     *   Must be linked to a Teacher record.
+     *
+     * Reviewer:
+     *   Does NOT require a Teacher or Student link.
+     *
+     * Admin:
+     *   Does NOT require a Student or Teacher link.
+     */
 
     const studentId =
       role === "student"
-        ? await resolveStudentId(config, fields)
+        ? await resolveStudentId(
+            config,
+            fields
+          )
         : null;
 
     const teacherId =
-      role === "teacher" || role === "reviewer"
-        ? await resolveTeacherId(config, fields)
+      role === "teacher"
+        ? await resolveTeacherId(
+            config,
+            fields
+          )
         : null;
 
-    if (role === "student" && !studentId) {
+    // Student accounts require a valid Student link.
+    if (
+      role === "student" &&
+      !studentId
+    ) {
       return send(res, 403, {
-        error: "Student account is not properly linked.",
+        error:
+          "Student account is not properly linked.",
       });
     }
 
+    // Teacher accounts require a valid Teacher link.
     if (
-      (role === "teacher" || role === "reviewer") &&
+      role === "teacher" &&
       !teacherId
     ) {
       return send(res, 403, {
-        error: "Staff account is not properly linked.",
+        error:
+          "Teacher account is not properly linked.",
       });
     }
 
-    await resetLoginFailure(config, userRecord);
+    /*
+     * REVIEWER
+     *
+     * No Student or Teacher relationship is required.
+     *
+     * The authenticated role itself grants access
+     * to the Reviewer Portal.
+     */
+
+    await resetLoginFailure(
+      config,
+      userRecord
+    );
 
     const token = createSessionToken({
       sub: userRecord.id,
       role,
-      studentId: studentId || undefined,
-      teacherId: teacherId || undefined,
+      studentId:
+        studentId || undefined,
+      teacherId:
+        teacherId || undefined,
     });
 
     setSessionCookie(res, token);
@@ -294,15 +406,21 @@ const result = await airtableList(
       ok: true,
       user: {
         role,
-        studentId: studentId || null,
-        teacherId: teacherId || null,
+        studentId:
+          studentId || null,
+        teacherId:
+          teacherId || null,
       },
     });
   } catch (error) {
-    console.error("Authentication error:", error);
+    console.error(
+      "Authentication error:",
+      error
+    );
 
     return send(res, 500, {
-      error: "Authentication service temporarily unavailable.",
+      error:
+        "Authentication service temporarily unavailable.",
     });
   }
 }
