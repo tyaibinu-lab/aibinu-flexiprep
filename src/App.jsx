@@ -6,6 +6,7 @@ import Login from "./pages/public/Login.jsx";
 import StudentDashboard from "./pages/student/Dashboard.jsx";
 import TeacherDashboard from "./pages/teacher/Dashboard.jsx";
 import AdminDashboard from "./pages/admin/Dashboard.jsx";
+import ReviewerDashboard from "./pages/reviewer/ReviewerDashboard.jsx";
 import ProtectedRoute from "./components/auth/ProtectedRoute.jsx";
 
 function App() {
@@ -32,6 +33,16 @@ function App() {
               <AdminDashboard />
             </ProtectedRoute>
           }
+ />
+
+        <Route
+          path="/reviewer"
+          element={
+           <ProtectedRoute allowedRoles={["reviewer", "admin"]}>
+              <ReviewerDashboard />
+            </ProtectedRoute>
+         }
+         
         />
 
         <Route
