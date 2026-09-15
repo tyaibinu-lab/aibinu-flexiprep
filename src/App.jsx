@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import AcademicManagement from "./pages/teacher/AcademicManagement.jsx";
 
 import Home from "./pages/public/Home.jsx";
 import Login from "./pages/public/Login.jsx";
@@ -17,14 +18,31 @@ function App() {
         <Route path="/login" element={<Login />} />
 
         <Route
-  path="/student"
-  element={
-    <ProtectedRoute allowedRoles={["student"]}>
-      <StudentDashboard />
-    </ProtectedRoute>
-  }
-/>
-        <Route path="/teacher" element={<ProtectedRoute allowedRoles={["teacher"]}><TeacherDashboard /></ProtectedRoute>} />
+          path="/student"
+          element={
+            <ProtectedRoute allowedRoles={["student"]}>
+              <StudentDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/teacher"
+          element={
+            <ProtectedRoute allowedRoles={["teacher"]}>
+              <TeacherDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/teacher/academic"
+          element={
+            <ProtectedRoute allowedRoles={["teacher"]}>
+              <AcademicManagement />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/admin"
@@ -33,16 +51,15 @@ function App() {
               <AdminDashboard />
             </ProtectedRoute>
           }
- />
+        />
 
         <Route
           path="/reviewer"
           element={
-           <ProtectedRoute allowedRoles={["reviewer", "admin"]}>
+            <ProtectedRoute allowedRoles={["reviewer", "admin"]}>
               <ReviewerDashboard />
             </ProtectedRoute>
-         }
-         
+          }
         />
 
         <Route
@@ -60,4 +77,3 @@ function App() {
 }
 
 export default App;
-

@@ -28,6 +28,12 @@ export function getConfig() {
           process.env.AIRTABLE_STUDENTS_TABLE || "Students",
         teachers:
           process.env.AIRTABLE_TEACHERS_TABLE || "Teachers",
+        aiJobs:
+          process.env.AIRTABLE_AI_JOBS_TABLE || "tbldFSYwYcTMtMm9A",
+        noteBankNotes:
+          process.env.AIRTABLE_NOTEBANK_NOTES_TABLE || "tblsEjHgHA7vhPgm0",
+        questions:
+          process.env.AIRTABLE_QUESTIONS_TABLE || "tblWz5hU4tpVvMJbF",
       },
     },
 

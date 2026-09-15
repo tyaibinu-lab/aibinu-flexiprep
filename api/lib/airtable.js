@@ -55,9 +55,14 @@ async function airtableRequest(table, options = {}) {
 }
 
 export async function airtableList(table, query = "") {
+  const queryString =
+    typeof query === "string"
+      ? query
+      : new URLSearchParams(query).toString();
+
   return airtableRequest(table, {
     method: "GET",
-    query,
+    query: queryString,
   });
 }
 
