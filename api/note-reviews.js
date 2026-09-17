@@ -462,11 +462,6 @@ async function submitForReview(
     Status: "Under Review",
   };
 
-  if (submittedBy) {
-    noteFields.Submitted_By =
-      submittedBy;
-  }
-
   const updatedNote =
     await airtableUpdate(
       NOTES_TABLE,
@@ -553,7 +548,7 @@ async function approveNote(
   const targetClass =
     getText(
       body,
-      "targetClass",
+      "targetClass"
       "Target Class",
       "class"
     );
