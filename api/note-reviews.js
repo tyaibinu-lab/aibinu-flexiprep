@@ -1,6 +1,4 @@
-import {
-  requireRole,
-} from "./lib/_auth.js";
+import { requireRole } from "./lib/_auth.js";
 
 import {
   airtableList,
@@ -51,8 +49,10 @@ function sendJson(res, status, payload) {
 
 function methodNotAllowed(res) {
   res.setHeader("Allow", "GET, POST, PUT, PATCH");
+
   return sendJson(res, 405, {
     ok: false,
+    success: false,
     error: "Method not allowed",
   });
 }
@@ -129,98 +129,77 @@ function getNoteId(req, body) {
   ).trim();
 }
 
-function getRecordId(req, body) {
-  return String(
-    body?.recordId ||
-      body?.record_id ||
-      req.query?.recordId ||
-      req.query?.record_id ||
-      ""
-  ).trim();
-}
-
 function getText(body, ...keys) {
   for (const key of keys) {
     if (
       body?.[key] !== undefined &&
       body?.[key] !== null
     ) {
-      return String(body[key]).trim();
+      const value = String(body[key]).trim();
+
+      if (value) {
+        return value;
+      }
     }
   }
 
   return "";
 }
 
-function getOptionalValue(body, ...keys) {
-  for (const key of keys) {
-    if (
-      body?.[key] !== undefined &&
-      body?.[key] !== null &&
-      String(body[key]).trim() !== ""
-    ) {
-      return body[key];
-    }
-  }
-
-  return null;
+function escapeFormulaValue(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
 }
 
+/**
+ * Find a note by:
+ * 1. Airtable record ID
+ * 2. Custom Note ID
+ */
 async function findNote(noteId) {
   if (!noteId) {
     return null;
   }
 
+  // First try Airtable record ID.
   try {
-    return await airtableGet(
+    const direct = await airtableGet(
       NOTES_TABLE,
       noteId
     );
+
+    if (direct) {
+      return direct;
+    }
+  } catch {
+    // Continue to custom Note ID lookup.
+  }
+
+  // Then try common custom Note ID fields.
+  const escaped = escapeFormulaValue(noteId);
+
+  const formula =
+    `OR(` +
+    `{Note ID}="${escaped}",` +
+    `{Note_ID}="${escaped}",` +
+    `{noteId}="${escaped}",` +
+    `{ID}="${escaped}"` +
+    `)`;
+
+  try {
+    const result = await airtableList(
+      NOTES_TABLE,
+      new URLSearchParams({
+        filterByFormula: formula,
+        maxRecords: "1",
+      }).toString()
+    );
+
+    return result?.records?.[0] || null;
   } catch {
     return null;
   }
-}
-
-async function findApprovalForNote(noteId) {
-  if (!noteId) {
-    return null;
-  }
-
-  const formula =
-    `OR({Note ID}="${noteId}",` +
-    `{Note_ID}="${noteId}",` +
-    `{noteId}="${noteId}")`;
-
-  const result = await airtableList(
-    APPROVALS_TABLE,
-    new URLSearchParams({
-      filterByFormula: formula,
-      maxRecords: "1",
-    }).toString()
-  );
-
-  return result?.records?.[0] || null;
-}
-
-async function findPublicationForNote(noteId) {
-  if (!noteId) {
-    return null;
-  }
-
-  const formula =
-    `OR({Note ID}="${noteId}",` +
-    `{Note_ID}="${noteId}",` +
-    `{noteId}="${noteId}")`;
-
-  const result = await airtableList(
-    PUBLICATIONS_TABLE,
-    new URLSearchParams({
-      filterByFormula: formula,
-      maxRecords: "1",
-    }).toString()
-  );
-
-  return result?.records?.[0] || null;
 }
 
 function noteIdFromRecord(record) {
@@ -236,25 +215,97 @@ function noteIdFromRecord(record) {
   ).trim();
 }
 
-function approvalStatusFromRecord(record) {
-  return normalizeStatus(
-    firstValue(record, [
-      "Status",
-      "Review Status",
-      "Approval Status",
-    ])
-  );
+async function findApprovalForNote(noteId) {
+  if (!noteId) {
+    return null;
+  }
+
+  const escaped = escapeFormulaValue(noteId);
+
+  const formula =
+    `OR(` +
+    `{Note ID}="${escaped}",` +
+    `{Note_ID}="${escaped}",` +
+    `{noteId}="${escaped}"` +
+    `)`;
+
+  try {
+    const result = await airtableList(
+      APPROVALS_TABLE,
+      new URLSearchParams({
+        filterByFormula: formula,
+        maxRecords: "1",
+      }).toString()
+    );
+
+    return result?.records?.[0] || null;
+  } catch {
+    return null;
+  }
 }
 
-function publicationStatusFromRecord(record) {
-  return normalizeStatus(
-    firstValue(record, [
-      "Status",
-      "Publication Status",
-    ])
-  );
+async function findPublicationForNote(noteId) {
+  if (!noteId) {
+    return null;
+  }
+
+  const escaped = escapeFormulaValue(noteId);
+
+  const formula =
+    `OR(` +
+    `{Note ID}="${escaped}",` +
+    `{Note_ID}="${escaped}",` +
+    `{noteId}="${escaped}"` +
+    `)`;
+
+  try {
+    const result = await airtableList(
+      PUBLICATIONS_TABLE,
+      new URLSearchParams({
+        filterByFormula: formula,
+        maxRecords: "1",
+      }).toString()
+    );
+
+    return result?.records?.[0] || null;
+  } catch {
+    return null;
+  }
 }
 
+/**
+ * Convert an Airtable note record into the flat object
+ * expected by ReviewerDashboard.jsx.
+ */
+function flattenNoteRecord(record, approval, publication) {
+  const fields = record?.fields || {};
+  const noteId = noteIdFromRecord(record);
+
+  return {
+    ...fields,
+
+    airtableId: record?.id || "",
+    "Note ID": noteId,
+
+    approval: approval
+      ? {
+          id: approval.id,
+          fields: approval.fields || {},
+        }
+      : null,
+
+    publication: publication
+      ? {
+          id: publication.id,
+          fields: publication.fields || {},
+        }
+      : null,
+  };
+}
+
+/**
+ * GET /api/note-reviews?list=review
+ */
 async function listReviewQueue(res) {
   const formula =
     `OR(` +
@@ -273,9 +324,10 @@ async function listReviewQueue(res) {
 
   const records = result?.records || [];
 
-  const enriched = await Promise.all(
+  const notes = await Promise.all(
     records.map(async (record) => {
-      const noteId = noteIdFromRecord(record);
+      const noteId =
+        noteIdFromRecord(record);
 
       const approval =
         await findApprovalForNote(noteId);
@@ -283,36 +335,76 @@ async function listReviewQueue(res) {
       const publication =
         await findPublicationForNote(noteId);
 
-      return {
-        id: record.id,
-        noteId,
-        fields: record.fields || {},
-        approval: approval
-          ? {
-              id: approval.id,
-              fields: approval.fields || {},
-            }
-          : null,
-        publication: publication
-          ? {
-              id: publication.id,
-              fields: publication.fields || {},
-            }
-          : null,
-      };
+      return flattenNoteRecord(
+        record,
+        approval,
+        publication
+      );
     })
   );
 
   return sendJson(res, 200, {
     ok: true,
-    records: enriched,
+    success: true,
+    notes,
   });
 }
 
+/**
+ * GET /api/note-reviews?list=classes
+ */
+async function listClasses(res) {
+  const result = await airtableList(
+    CLASSES_TABLE,
+    new URLSearchParams({
+      maxRecords: "100",
+    }).toString()
+  );
+
+  const records = result?.records || [];
+
+  const classes = records.map((record) => {
+    const fields = record?.fields || {};
+
+    return {
+      id:
+        fields["Class ID"] ||
+        fields["Class_ID"] ||
+        fields["ID"] ||
+        record.id,
+
+      airtableId: record.id,
+
+      name:
+        fields["Name"] ||
+        fields["Class Name"] ||
+        fields["Class"] ||
+        fields["name"] ||
+        record.id,
+
+      code:
+        fields["Code"] ||
+        fields["Class Code"] ||
+        fields["Class_Code"] ||
+        "",
+    };
+  });
+
+  return sendJson(res, 200, {
+    ok: true,
+    success: true,
+    classes,
+  });
+}
+
+/**
+ * GET /api/note-reviews?noteId=...
+ */
 async function getSingleReview(res, noteId) {
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "noteId is required",
     });
   }
@@ -322,28 +414,42 @@ async function getSingleReview(res, noteId) {
   if (!note) {
     return sendJson(res, 404, {
       ok: false,
+      success: false,
       error: "Note not found",
     });
   }
 
+  const resolvedNoteId =
+    noteIdFromRecord(note);
+
   const approval =
-    await findApprovalForNote(noteId);
+    await findApprovalForNote(
+      resolvedNoteId
+    );
 
   const publication =
-    await findPublicationForNote(noteId);
+    await findPublicationForNote(
+      resolvedNoteId
+    );
 
   return sendJson(res, 200, {
     ok: true,
+    success: true,
+
     note: {
+      ...note.fields,
       id: note.id,
-      fields: note.fields || {},
+      airtableId: note.id,
+      "Note ID": resolvedNoteId,
     },
+
     approval: approval
       ? {
           id: approval.id,
           fields: approval.fields || {},
         }
       : null,
+
     publication: publication
       ? {
           id: publication.id,
@@ -353,6 +459,9 @@ async function getSingleReview(res, noteId) {
   });
 }
 
+/**
+ * Teacher saves an editable draft.
+ */
 async function saveDraft(
   res,
   body,
@@ -363,6 +472,7 @@ async function saveDraft(
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "noteId is required",
     });
   }
@@ -372,6 +482,7 @@ async function saveDraft(
   if (!note) {
     return sendJson(res, 404, {
       ok: false,
+      success: false,
       error: "Note not found",
     });
   }
@@ -394,11 +505,12 @@ async function saveDraft(
     "Topic_ID",
   ];
 
-  for (const field of allowedFields) {
+  for (const fieldName of allowedFields) {
     if (
-      body[field] !== undefined
+      body[fieldName] !== undefined
     ) {
-      fields[field] = body[field];
+      fields[fieldName] =
+        body[fieldName];
     }
   }
 
@@ -407,7 +519,9 @@ async function saveDraft(
   ) {
     return sendJson(res, 400, {
       ok: false,
-      error: "No editable fields supplied",
+      success: false,
+      error:
+        "No editable fields supplied",
     });
   }
 
@@ -420,8 +534,10 @@ async function saveDraft(
 
   return sendJson(res, 200, {
     ok: true,
+    success: true,
     message: "Note saved",
     note: updated,
+
     user: {
       role: authenticatedUser.role,
       teacherId:
@@ -431,6 +547,9 @@ async function saveDraft(
   });
 }
 
+/**
+ * Teacher submits a note for human review.
+ */
 async function submitForReview(
   res,
   body,
@@ -441,6 +560,7 @@ async function submitForReview(
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "noteId is required",
     });
   }
@@ -450,36 +570,51 @@ async function submitForReview(
   if (!note) {
     return sendJson(res, 404, {
       ok: false,
+      success: false,
       error: "Note not found",
     });
   }
 
+  /*
+   * Identity comes from the authenticated session.
+   * Do not trust a browser-supplied teacher ID.
+   */
   const submittedBy =
     authenticatedUser.teacherId ||
-    "";
+    null;
 
-  const noteFields = {
-    Status: "Under Review",
-  };
-
+  /*
+   * IMPORTANT:
+   * NoteBank_Notes should only receive fields that
+   * actually belong to that table.
+   *
+   * In particular, Submitted_By is NOT written here.
+   */
   const updatedNote =
     await airtableUpdate(
       NOTES_TABLE,
       note.id,
-      noteFields
+      {
+        Status: "Under Review",
+      }
     );
 
-  const existingApproval =
-    await findApprovalForNote(noteId);
+  const resolvedNoteId =
+    noteIdFromRecord(note);
 
+  const existingApproval =
+    await findApprovalForNote(
+      resolvedNoteId
+    );
+
+  /*
+   * Keep the approval payload conservative.
+   * Submitted_By was previously causing the Airtable
+   * "Unknown field name" failure.
+   */
   const approvalFields = {
     Status: "Under Review",
   };
-
-  if (submittedBy) {
-    approvalFields.Submitted_By =
-      submittedBy;
-  }
 
   let approval;
 
@@ -496,20 +631,29 @@ async function submitForReview(
         APPROVALS_TABLE,
         {
           ...approvalFields,
-          "Note ID": noteId,
+          "Note ID": resolvedNoteId,
         }
       );
   }
 
   return sendJson(res, 200, {
     ok: true,
+    success: true,
+
     message:
       "Note submitted for review",
+
     note: updatedNote,
+
     approval,
+
+    submittedBy,
   });
 }
 
+/**
+ * Reviewer approves and publishes a note.
+ */
 async function approveNote(
   res,
   body,
@@ -520,6 +664,7 @@ async function approveNote(
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "noteId is required",
     });
   }
@@ -529,6 +674,7 @@ async function approveNote(
   if (!note) {
     return sendJson(res, 404, {
       ok: false,
+      success: false,
       error: "Note not found",
     });
   }
@@ -548,7 +694,7 @@ async function approveNote(
   const targetClass =
     getText(
       body,
-      "targetClass"
+      "targetClass",
       "Target Class",
       "class"
     );
@@ -556,6 +702,7 @@ async function approveNote(
   if (!programme) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error:
         "Target Programme is required",
     });
@@ -564,26 +711,34 @@ async function approveNote(
   if (!targetClass) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error:
         "Target Class is required",
     });
   }
 
+  const resolvedNoteId =
+    noteIdFromRecord(note);
+
+  /*
+   * Update approval record.
+   */
   const approval =
-    await findApprovalForNote(noteId);
+    await findApprovalForNote(
+      resolvedNoteId
+    );
 
   const approvalFields = {
     Status: "Approved",
     Decision: "Approved",
+    "Reviewed At":
+      new Date().toISOString(),
   };
 
   if (reviewerId) {
     approvalFields.Reviewer =
       reviewerId;
   }
-
-  approvalFields.Reviewed_At =
-    new Date().toISOString();
 
   let savedApproval;
 
@@ -600,28 +755,36 @@ async function approveNote(
         APPROVALS_TABLE,
         {
           ...approvalFields,
-          "Note ID": noteId,
+          "Note ID": resolvedNoteId,
         }
       );
   }
 
+  /*
+   * Publication-specific fields belong in
+   * NoteBank_Publications, not NoteBank_Notes.
+   */
   const publication =
-    await findPublicationForNote(noteId);
+    await findPublicationForNote(
+      resolvedNoteId
+    );
 
   const publicationFields = {
     Status: "Published",
+
     "Target Programme":
       programme,
+
     "Target Class":
       targetClass,
+
     "Published At":
       new Date().toISOString(),
   };
 
   if (reviewerId) {
-    publicationFields[
-      "Published By"
-    ] = reviewerId;
+    publicationFields["Published By"] =
+      reviewerId;
   }
 
   let savedPublication;
@@ -639,11 +802,15 @@ async function approveNote(
         PUBLICATIONS_TABLE,
         {
           ...publicationFields,
-          "Note ID": noteId,
+          "Note ID": resolvedNoteId,
         }
       );
   }
 
+  /*
+   * Only after approval/publication succeeds,
+   * mark the NoteBank note as Published.
+   */
   const updatedNote =
     await airtableUpdate(
       NOTES_TABLE,
@@ -655,14 +822,24 @@ async function approveNote(
 
   return sendJson(res, 200, {
     ok: true,
+    success: true,
+
     message:
       "Note approved and published",
+
     note: updatedNote,
-    approval: savedApproval,
-    publication: savedPublication,
+
+    approval:
+      savedApproval,
+
+    publication:
+      savedPublication,
   });
 }
 
+/**
+ * Reviewer requests changes.
+ */
 async function requestChanges(
   res,
   body,
@@ -673,6 +850,7 @@ async function requestChanges(
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "noteId is required",
     });
   }
@@ -689,6 +867,7 @@ async function requestChanges(
   if (!comment) {
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error:
         "A review comment is required",
     });
@@ -699,6 +878,7 @@ async function requestChanges(
   if (!note) {
     return sendJson(res, 404, {
       ok: false,
+      success: false,
       error: "Note not found",
     });
   }
@@ -707,8 +887,13 @@ async function requestChanges(
     authenticatedUser.teacherId ||
     null;
 
+  const resolvedNoteId =
+    noteIdFromRecord(note);
+
   const approval =
-    await findApprovalForNote(noteId);
+    await findApprovalForNote(
+      resolvedNoteId
+    );
 
   const approvalFields = {
     Status: "Changes Requested",
@@ -738,14 +923,18 @@ async function requestChanges(
         APPROVALS_TABLE,
         {
           ...approvalFields,
-          "Note ID": noteId,
+          "Note ID": resolvedNoteId,
         }
       );
   }
 
+  /*
+   * If a publication already exists, make it
+   * unavailable while changes are being made.
+   */
   const existingPublication =
     await findPublicationForNote(
-      noteId
+      resolvedNoteId
     );
 
   if (existingPublication) {
@@ -769,21 +958,32 @@ async function requestChanges(
 
   return sendJson(res, 200, {
     ok: true,
+    success: true,
+
     message:
       "Changes requested",
+
     note: updatedNote,
-    approval: savedApproval,
+
+    approval:
+      savedApproval,
   });
 }
 
+/**
+ * Main API handler.
+ */
 export default async function handler(
   req,
   res
 ) {
   if (
-    !["GET", "POST", "PUT", "PATCH"].includes(
-      req.method
-    )
+    ![
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+    ].includes(req.method)
   ) {
     return methodNotAllowed(res);
   }
@@ -796,15 +996,21 @@ export default async function handler(
     } catch {
       return sendJson(res, 400, {
         ok: false,
+        success: false,
         error: "Invalid JSON body",
       });
     }
   }
 
-  const action = getAction(req, body);
+  const action =
+    getAction(req, body);
 
   let authenticatedUser;
 
+  /*
+   * GET:
+   * reviewer/admin only.
+   */
   if (req.method === "GET") {
     authenticatedUser =
       requireRole(
@@ -812,7 +1018,13 @@ export default async function handler(
         res,
         ["reviewer", "admin"]
       );
-  } else if (
+  }
+
+  /*
+   * Approve:
+   * reviewer/admin only.
+   */
+  else if (
     action === "approve"
   ) {
     authenticatedUser =
@@ -821,7 +1033,13 @@ export default async function handler(
         res,
         ["reviewer", "admin"]
       );
-  } else if (
+  }
+
+  /*
+   * Request changes:
+   * reviewer/admin only.
+   */
+  else if (
     [
       "request_changes",
       "changes",
@@ -834,10 +1052,17 @@ export default async function handler(
         res,
         ["reviewer", "admin"]
       );
-  } else if (
-    ["save", "submit"].includes(
-      action
-    )
+  }
+
+  /*
+   * Teacher operations:
+   * teacher/admin only.
+   */
+  else if (
+    [
+      "save",
+      "submit",
+    ].includes(action)
   ) {
     authenticatedUser =
       requireRole(
@@ -845,7 +1070,13 @@ export default async function handler(
         res,
         ["teacher", "admin"]
       );
-  } else {
+  }
+
+  /*
+   * Unknown actions:
+   * admin only.
+   */
+  else {
     authenticatedUser =
       requireRole(
         req,
@@ -859,6 +1090,9 @@ export default async function handler(
   }
 
   try {
+    /*
+     * GET operations.
+     */
     if (req.method === "GET") {
       const noteId =
         getNoteId(req, body);
@@ -878,6 +1112,12 @@ export default async function handler(
           .toLowerCase();
 
       if (
+        list === "classes"
+      ) {
+        return listClasses(res);
+      }
+
+      if (
         list === "review" ||
         list === "queue" ||
         !list
@@ -887,11 +1127,15 @@ export default async function handler(
 
       return sendJson(res, 400, {
         ok: false,
+        success: false,
         error:
           "Unsupported list parameter",
       });
     }
 
+    /*
+     * Teacher saves draft.
+     */
     if (action === "save") {
       return saveDraft(
         res,
@@ -900,6 +1144,9 @@ export default async function handler(
       );
     }
 
+    /*
+     * Teacher submits note for review.
+     */
     if (action === "submit") {
       return submitForReview(
         res,
@@ -908,6 +1155,9 @@ export default async function handler(
       );
     }
 
+    /*
+     * Reviewer approves and publishes.
+     */
     if (action === "approve") {
       return approveNote(
         res,
@@ -916,6 +1166,9 @@ export default async function handler(
       );
     }
 
+    /*
+     * Reviewer requests changes.
+     */
     if (
       [
         "request_changes",
@@ -932,6 +1185,7 @@ export default async function handler(
 
     return sendJson(res, 400, {
       ok: false,
+      success: false,
       error: "Unsupported action",
     });
   } catch (error) {
@@ -942,6 +1196,7 @@ export default async function handler(
 
     return sendJson(res, 500, {
       ok: false,
+      success: false,
       error:
         "Unable to process NoteBank review request",
     });
