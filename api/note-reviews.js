@@ -215,31 +215,47 @@ function noteIdFromRecord(record) {
   ).trim();
 }
 
-async function findApprovalForNote(noteId) {
-  if (!noteId) {
+async function findApprovalForNote(noteRecordId) {
+  if (!noteRecordId) {
     return null;
   }
-
-  const escaped = escapeFormulaValue(noteId);
-
-  const formula =
-    `OR(` +
-    `{Note ID}="${escaped}",` +
-    `{Note_ID}="${escaped}",` +
-    `{noteId}="${escaped}"` +
-    `)`;
 
   try {
     const result = await airtableList(
       APPROVALS_TABLE,
       new URLSearchParams({
-        filterByFormula: formula,
-        maxRecords: "1",
+        pageSize: "100",
       }).toString()
     );
 
-    return result?.records?.[0] || null;
-  } catch {
+    const records = Array.isArray(result?.records)
+      ? result.records
+      : [];
+
+    return (
+      records.find((record) => {
+        const fields = record?.fields || {};
+
+        const linkedNotes = Array.isArray(fields["Note"])
+          ? fields["Note"]
+          : [];
+
+        const status = String(
+          fields["Status"] || ""
+        ).trim();
+
+        return (
+          linkedNotes.includes(String(noteRecordId)) &&
+          status === "Pending"
+        );
+      }) || null
+    );
+  } catch (error) {
+    console.error(
+      "Failed to find pending NoteBank approval:",
+      error
+    );
+
     return null;
   }
 }
@@ -550,6 +566,16 @@ async function saveDraft(
 /**
  * Teacher submits a note for human review.
  */
+/**
+ * Teacher submits a note for human review.
+ *
+ * Security:
+ * - noteId identifies the note being submitted.
+ * - teacher identity comes ONLY from the authenticated session.
+ * - Submitted By is written to the NoteBank_Approvals
+ *   linked Teachers field.
+ * - Reviewer remains empty until a reviewer acts.
+ */
 async function submitForReview(
   res,
   body,
@@ -576,79 +602,191 @@ async function submitForReview(
   }
 
   /*
-   * Identity comes from the authenticated session.
-   * Do not trust a browser-supplied teacher ID.
+   * Identity MUST come from the signed authenticated session.
    */
   const submittedBy =
-    authenticatedUser.teacherId ||
-    null;
+    authenticatedUser?.teacherId || null;
+
+  if (!submittedBy) {
+    return sendJson(res, 403, {
+      ok: false,
+      success: false,
+      error:
+        "Authenticated teacher is not linked to a Teacher record.",
+    });
+  }
 
   /*
-   * IMPORTANT:
-   * NoteBank_Notes should only receive fields that
-   * actually belong to that table.
-   *
-   * In particular, Submitted_By is NOT written here.
+   * The Airtable record ID is what the NoteBank_Approvals
+   * linked field "Note" expects.
    */
-  const updatedNote =
-    await airtableUpdate(
+  const noteRecordId =
+    String(note.id || "").trim();
+
+  if (!noteRecordId) {
+    return sendJson(res, 500, {
+      ok: false,
+      success: false,
+      error:
+        "The note does not have a valid Airtable record ID.",
+    });
+  }
+
+  /*
+   * Prevent duplicate pending submissions.
+   */
+  const existingApproval =
+    await findApprovalForNote(noteRecordId);
+
+  if (existingApproval) {
+    return sendJson(res, 409, {
+      ok: false,
+      success: false,
+      error:
+        "This note is already pending review.",
+      approval: existingApproval,
+    });
+  }
+
+  /*
+   * Only editable/draft states can be submitted.
+   */
+  const currentStatus = String(
+    note?.fields?.Status || ""
+  ).trim();
+
+  const allowedStatuses = [
+    "AI Draft",
+    "Draft",
+    "Changes Requested",
+  ];
+
+  if (
+    currentStatus &&
+    !allowedStatuses.includes(currentStatus)
+  ) {
+    return sendJson(res, 409, {
+      ok: false,
+      success: false,
+      error:
+        `This note cannot be submitted from status "${currentStatus}".`,
+    });
+  }
+
+  /*
+   * Preserve the note version.
+   */
+  const version = String(
+    note?.fields?.Version || "1"
+  ).trim();
+
+  /*
+   * STEP 1:
+   * Move the NoteBank_Notes record to Under Review.
+   */
+  let updatedNote;
+
+  try {
+    updatedNote = await airtableUpdate(
       NOTES_TABLE,
-      note.id,
+      noteRecordId,
       {
         Status: "Under Review",
       }
     );
-
-  const resolvedNoteId =
-    noteIdFromRecord(note);
-
-  const existingApproval =
-    await findApprovalForNote(
-      resolvedNoteId
+  } catch (error) {
+    console.error(
+      "Failed to move note to Under Review:",
+      error
     );
 
-  /*
-   * Keep the approval payload conservative.
-   * Submitted_By was previously causing the Airtable
-   * "Unknown field name" failure.
-   */
-  const approvalFields = {
-    Status: "Under Review",
-  };
-
-  let approval;
-
-  if (existingApproval) {
-    approval =
-      await airtableUpdate(
-        APPROVALS_TABLE,
-        existingApproval.id,
-        approvalFields
-      );
-  } else {
-    approval =
-      await airtableCreate(
-        APPROVALS_TABLE,
-        {
-          ...approvalFields,
-          "Note ID": resolvedNoteId,
-        }
-      );
+    return sendJson(res, 500, {
+      ok: false,
+      success: false,
+      error:
+        "Unable to move the note into the review workflow.",
+    });
   }
 
-  return sendJson(res, 200, {
-    ok: true,
-    success: true,
+  /*
+   * STEP 2:
+   * Create the NoteBank_Approvals record using
+   * the actual Airtable schema.
+   */
+  try {
+    const approvalFields = {
+      Note: [noteRecordId],
 
-    message:
-      "Note submitted for review",
+      "Submitted By": [submittedBy],
 
-    note: updatedNote,
+      Reviewer: [],
 
-    approval,
+      "Submission Date":
+        new Date().toISOString(),
 
-    submittedBy,
-  });
+      "Review Date": null,
+
+      Status: "Pending",
+
+      "Reviewer Comments": "",
+
+      Version: version,
+    };
+
+    const approval =
+      await airtableCreate(
+        APPROVALS_TABLE,
+        approvalFields
+      );
+
+    return sendJson(res, 200, {
+      ok: true,
+      success: true,
+
+      message:
+        "Note submitted for review.",
+
+      note: updatedNote,
+
+      approval,
+
+      status: "Under Review",
+
+      approvalStatus: "Pending",
+    });
+  } catch (error) {
+    console.error(
+      "Failed to create NoteBank approval:",
+      error
+    );
+
+    /*
+     * Roll the NoteBank note back if the approval
+     * record could not be created.
+     */
+    try {
+      await airtableUpdate(
+        NOTES_TABLE,
+        noteRecordId,
+        {
+          Status:
+            currentStatus || "Draft",
+        }
+      );
+    } catch (rollbackError) {
+      console.error(
+        "Failed to rollback note status:",
+        rollbackError
+      );
+    }
+
+    return sendJson(res, 500, {
+      ok: false,
+      success: false,
+      error:
+        "The review request could not be created. The note was returned to its previous status.",
+    });
+  }
 }
 
 /**
