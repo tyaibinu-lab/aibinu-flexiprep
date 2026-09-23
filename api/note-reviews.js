@@ -215,6 +215,12 @@ function noteIdFromRecord(record) {
   ).trim();
 }
 
+/**
+ * Find the pending approval belonging to a NoteBank note.
+ *
+ * NoteBank_Approvals.Note is a linked Airtable field,
+ * so we compare the linked Airtable record ID directly.
+ */
 async function findApprovalForNote(noteRecordId) {
   if (!noteRecordId) {
     return null;
@@ -236,7 +242,9 @@ async function findApprovalForNote(noteRecordId) {
       records.find((record) => {
         const fields = record?.fields || {};
 
-        const linkedNotes = Array.isArray(fields["Note"])
+        const linkedNotes = Array.isArray(
+          fields["Note"]
+        )
           ? fields["Note"]
           : [];
 
@@ -245,7 +253,9 @@ async function findApprovalForNote(noteRecordId) {
         ).trim();
 
         return (
-          linkedNotes.includes(String(noteRecordId)) &&
+          linkedNotes.includes(
+            String(noteRecordId)
+          ) &&
           status === "Pending"
         );
       }) || null
@@ -260,31 +270,77 @@ async function findApprovalForNote(noteRecordId) {
   }
 }
 
-async function findPublicationForNote(noteId) {
-  if (!noteId) {
+/**
+ * Find a publication belonging to a NoteBank note.
+ *
+ * NoteBank_Publications.Note is a linked Airtable
+ * field, so the lookup uses the Airtable record ID.
+ *
+ * When a version is supplied, the publication must also
+ * belong to that exact Note version.
+ */
+async function findPublicationForNote(
+  noteRecordId,
+  version = null
+) {
+  if (!noteRecordId) {
     return null;
   }
-
-  const escaped = escapeFormulaValue(noteId);
-
-  const formula =
-    `OR(` +
-    `{Note ID}="${escaped}",` +
-    `{Note_ID}="${escaped}",` +
-    `{noteId}="${escaped}"` +
-    `)`;
 
   try {
     const result = await airtableList(
       PUBLICATIONS_TABLE,
       new URLSearchParams({
-        filterByFormula: formula,
-        maxRecords: "1",
+        pageSize: "100",
       }).toString()
     );
 
-    return result?.records?.[0] || null;
-  } catch {
+    const records = Array.isArray(result?.records)
+      ? result.records
+      : [];
+
+    return (
+      records.find((record) => {
+        const fields = record?.fields || {};
+
+        const linkedNotes = Array.isArray(
+          fields["Note"]
+        )
+          ? fields["Note"]
+          : [];
+
+        if (
+          !linkedNotes.includes(
+            String(noteRecordId)
+          )
+        ) {
+          return false;
+        }
+
+        if (
+          version !== null &&
+          version !== undefined
+        ) {
+          const publicationVersion =
+            String(
+              fields["Version"] ?? ""
+            ).trim();
+
+          return (
+            publicationVersion ===
+            String(version).trim()
+          );
+        }
+
+        return true;
+      }) || null
+    );
+  } catch (error) {
+    console.error(
+      "Failed to find NoteBank publication:",
+      error
+    );
+
     return null;
   }
 }
@@ -293,7 +349,11 @@ async function findPublicationForNote(noteId) {
  * Convert an Airtable note record into the flat object
  * expected by ReviewerDashboard.jsx.
  */
-function flattenNoteRecord(record, approval, publication) {
+function flattenNoteRecord(
+  record,
+  approval,
+  publication
+) {
   const fields = record?.fields || {};
   const noteId = noteIdFromRecord(record);
 
@@ -346,10 +406,18 @@ async function listReviewQueue(res) {
         noteIdFromRecord(record);
 
       const approval =
-        await findApprovalForNote(noteId);
+        await findApprovalForNote(
+          noteId
+        );
+
+      const version =
+        record?.fields?.Version || 1;
 
       const publication =
-        await findPublicationForNote(noteId);
+        await findPublicationForNote(
+          noteId,
+          version
+        );
 
       return flattenNoteRecord(
         record,
@@ -367,9 +435,22 @@ async function listReviewQueue(res) {
 }
 
 /**
- * GET /api/note-reviews?list=classes
+ * Find a Class record by:
+ * 1. Airtable record ID
+ * 2. Class ID
+ * 3. Class name
+ * 4. Class code
  */
-async function listClasses(res) {
+async function findClassRecord(
+  classValue
+) {
+  const value =
+    String(classValue || "").trim();
+
+  if (!value) {
+    return null;
+  }
+
   const result = await airtableList(
     CLASSES_TABLE,
     new URLSearchParams({
@@ -377,46 +458,120 @@ async function listClasses(res) {
     }).toString()
   );
 
-  const records = result?.records || [];
+  const records =
+    result?.records || [];
 
-  const classes = records.map((record) => {
-    const fields = record?.fields || {};
+  return (
+    records.find((record) => {
+      const fields =
+        record?.fields || {};
 
-    return {
-      id:
+      const classId =
         fields["Class ID"] ||
         fields["Class_ID"] ||
         fields["ID"] ||
-        record.id,
+        "";
 
-      airtableId: record.id,
-
-      name:
+      const className =
         fields["Name"] ||
         fields["Class Name"] ||
         fields["Class"] ||
         fields["name"] ||
-        record.id,
+        "";
 
-      code:
+      const classCode =
         fields["Code"] ||
         fields["Class Code"] ||
         fields["Class_Code"] ||
-        "",
-    };
-  });
+        "";
 
-  return sendJson(res, 200, {
-    ok: true,
-    success: true,
-    classes,
-  });
+      return (
+        record.id === value ||
+        String(classId) === value ||
+        String(className) === value ||
+        String(classCode) === value
+      );
+    }) || null
+  );
+}
+
+/**
+ * GET /api/note-reviews?list=classes
+ *
+ * Returns the class records required by
+ * ReviewerDashboard.jsx.
+ */
+async function listClasses(res) {
+  try {
+    const result = await airtableList(
+      CLASSES_TABLE,
+      new URLSearchParams({
+        maxRecords: "100",
+      }).toString()
+    );
+
+    const records =
+      Array.isArray(result?.records)
+        ? result.records
+        : [];
+
+    const classes =
+      records.map((record) => {
+        const fields =
+          record?.fields || {};
+
+        return {
+          id:
+            fields["Class ID"] ||
+            fields["Class_ID"] ||
+            fields["ID"] ||
+            record.id,
+
+          airtableId:
+            record.id,
+
+          name:
+            fields["Name"] ||
+            fields["Class Name"] ||
+            fields["Class"] ||
+            fields["name"] ||
+            record.id,
+
+          code:
+            fields["Code"] ||
+            fields["Class Code"] ||
+            fields["Class_Code"] ||
+            "",
+        };
+      });
+
+    return sendJson(res, 200, {
+      ok: true,
+      success: true,
+      classes,
+    });
+  } catch (error) {
+    console.error(
+      "Failed to list Classes:",
+      error
+    );
+
+    return sendJson(res, 500, {
+      ok: false,
+      success: false,
+      error:
+        "Unable to load classes",
+    });
+  }
 }
 
 /**
  * GET /api/note-reviews?noteId=...
  */
-async function getSingleReview(res, noteId) {
+async function getSingleReview(
+  res,
+  noteId
+) {
   if (!noteId) {
     return sendJson(res, 400, {
       ok: false,
@@ -425,7 +580,8 @@ async function getSingleReview(res, noteId) {
     });
   }
 
-  const note = await findNote(noteId);
+  const note =
+    await findNote(noteId);
 
   if (!note) {
     return sendJson(res, 404, {
@@ -443,9 +599,13 @@ async function getSingleReview(res, noteId) {
       resolvedNoteId
     );
 
+  const version =
+    note?.fields?.Version || 1;
+
   const publication =
     await findPublicationForNote(
-      resolvedNoteId
+      resolvedNoteId,
+      version
     );
 
   return sendJson(res, 200, {
@@ -462,14 +622,16 @@ async function getSingleReview(res, noteId) {
     approval: approval
       ? {
           id: approval.id,
-          fields: approval.fields || {},
+          fields:
+            approval.fields || {},
         }
       : null,
 
     publication: publication
       ? {
           id: publication.id,
-          fields: publication.fields || {},
+          fields:
+            publication.fields || {},
         }
       : null,
   });
@@ -483,7 +645,8 @@ async function saveDraft(
   body,
   authenticatedUser
 ) {
-  const noteId = getNoteId(null, body);
+  const noteId =
+    getNoteId(null, body);
 
   if (!noteId) {
     return sendJson(res, 400, {
@@ -493,7 +656,8 @@ async function saveDraft(
     });
   }
 
-  const note = await findNote(noteId);
+  const note =
+    await findNote(noteId);
 
   if (!note) {
     return sendJson(res, 404, {
@@ -512,7 +676,30 @@ async function saveDraft(
     "Content",
     "Content_JSON",
     "Content JSON",
+
+    "Learning Objectives",
+    "Key Terms",
+    "Examples",
+    "Worked Examples",
+    "Formulae",
+    "Applications",
+    "Common Misconceptions",
+    "Summary",
+    "Exam Tips",
+
+    "WAEC Focus",
+    "NECO Focus",
+    "UTME Focus",
+
+    "Diagrams",
+    "Visual Components",
+
+    "Teacher Prompt",
+    "Review Comment",
+
     "Status",
+
+    // Existing compatibility fields
     "Programme",
     "Class",
     "Academic_Level",
@@ -521,7 +708,9 @@ async function saveDraft(
     "Topic_ID",
   ];
 
-  for (const fieldName of allowedFields) {
+  for (
+    const fieldName of allowedFields
+  ) {
     if (
       body[fieldName] !== undefined
     ) {
@@ -555,7 +744,8 @@ async function saveDraft(
     note: updated,
 
     user: {
-      role: authenticatedUser.role,
+      role:
+        authenticatedUser.role,
       teacherId:
         authenticatedUser.teacherId ||
         null,
@@ -563,9 +753,6 @@ async function saveDraft(
   });
 }
 
-/**
- * Teacher submits a note for human review.
- */
 /**
  * Teacher submits a note for human review.
  *
@@ -581,7 +768,8 @@ async function submitForReview(
   body,
   authenticatedUser
 ) {
-  const noteId = getNoteId(null, body);
+  const noteId =
+    getNoteId(null, body);
 
   if (!noteId) {
     return sendJson(res, 400, {
@@ -591,7 +779,8 @@ async function submitForReview(
     });
   }
 
-  const note = await findNote(noteId);
+  const note =
+    await findNote(noteId);
 
   if (!note) {
     return sendJson(res, 404, {
@@ -602,10 +791,12 @@ async function submitForReview(
   }
 
   /*
-   * Identity MUST come from the signed authenticated session.
+   * Identity MUST come from the signed
+   * authenticated session.
    */
   const submittedBy =
-    authenticatedUser?.teacherId || null;
+    authenticatedUser?.teacherId ||
+    null;
 
   if (!submittedBy) {
     return sendJson(res, 403, {
@@ -617,8 +808,9 @@ async function submitForReview(
   }
 
   /*
-   * The Airtable record ID is what the NoteBank_Approvals
-   * linked field "Note" expects.
+   * The Airtable record ID is what the
+   * NoteBank_Approvals linked field "Note"
+   * expects.
    */
   const noteRecordId =
     String(note.id || "").trim();
@@ -636,7 +828,9 @@ async function submitForReview(
    * Prevent duplicate pending submissions.
    */
   const existingApproval =
-    await findApprovalForNote(noteRecordId);
+    await findApprovalForNote(
+      noteRecordId
+    );
 
   if (existingApproval) {
     return sendJson(res, 409, {
@@ -644,16 +838,18 @@ async function submitForReview(
       success: false,
       error:
         "This note is already pending review.",
-      approval: existingApproval,
+      approval:
+        existingApproval,
     });
   }
 
   /*
    * Only editable/draft states can be submitted.
    */
-  const currentStatus = String(
-    note?.fields?.Status || ""
-  ).trim();
+  const currentStatus =
+    String(
+      note?.fields?.Status || ""
+    ).trim();
 
   const allowedStatuses = [
     "AI Draft",
@@ -663,7 +859,9 @@ async function submitForReview(
 
   if (
     currentStatus &&
-    !allowedStatuses.includes(currentStatus)
+    !allowedStatuses.includes(
+      currentStatus
+    )
   ) {
     return sendJson(res, 409, {
       ok: false,
@@ -676,24 +874,28 @@ async function submitForReview(
   /*
    * Preserve the note version.
    */
-  const version = String(
-    note?.fields?.Version || "1"
-  ).trim();
+  const version =
+    String(
+      note?.fields?.Version || "1"
+    ).trim();
 
   /*
    * STEP 1:
-   * Move the NoteBank_Notes record to Under Review.
+   * Move the NoteBank_Notes record to
+   * Under Review.
    */
   let updatedNote;
 
   try {
-    updatedNote = await airtableUpdate(
-      NOTES_TABLE,
-      noteRecordId,
-      {
-        Status: "Under Review",
-      }
-    );
+    updatedNote =
+      await airtableUpdate(
+        NOTES_TABLE,
+        noteRecordId,
+        {
+          Status:
+            "Under Review",
+        }
+      );
   } catch (error) {
     console.error(
       "Failed to move note to Under Review:",
@@ -710,14 +912,15 @@ async function submitForReview(
 
   /*
    * STEP 2:
-   * Create the NoteBank_Approvals record using
-   * the actual Airtable schema.
+   * Create the NoteBank_Approvals record
+   * using the actual Airtable schema.
    */
   try {
     const approvalFields = {
       Note: [noteRecordId],
 
-      "Submitted By": [submittedBy],
+      "Submitted By":
+        [submittedBy],
 
       Reviewer: [],
 
@@ -728,7 +931,8 @@ async function submitForReview(
 
       Status: "Pending",
 
-      "Reviewer Comments": "",
+      "Reviewer Comments":
+        "",
 
       Version: version,
     };
@@ -750,9 +954,11 @@ async function submitForReview(
 
       approval,
 
-      status: "Under Review",
+      status:
+        "Under Review",
 
-      approvalStatus: "Pending",
+      approvalStatus:
+        "Pending",
     });
   } catch (error) {
     console.error(
@@ -761,8 +967,8 @@ async function submitForReview(
     );
 
     /*
-     * Roll the NoteBank note back if the approval
-     * record could not be created.
+     * Roll the NoteBank note back if the
+     * approval record could not be created.
      */
     try {
       await airtableUpdate(
@@ -770,10 +976,13 @@ async function submitForReview(
         noteRecordId,
         {
           Status:
-            currentStatus || "Draft",
+            currentStatus ||
+            "Draft",
         }
       );
-    } catch (rollbackError) {
+    } catch (
+      rollbackError
+    ) {
       console.error(
         "Failed to rollback note status:",
         rollbackError
@@ -797,7 +1006,8 @@ async function approveNote(
   body,
   authenticatedUser
 ) {
-  const noteId = getNoteId(null, body);
+  const noteId =
+    getNoteId(null, body);
 
   if (!noteId) {
     return sendJson(res, 400, {
@@ -807,7 +1017,8 @@ async function approveNote(
     });
   }
 
-  const note = await findNote(noteId);
+  const note =
+    await findNote(noteId);
 
   if (!note) {
     return sendJson(res, 404, {
@@ -837,6 +1048,15 @@ async function approveNote(
       "class"
     );
 
+  const reviewComment =
+    getText(
+      body,
+      "reviewComment",
+      "reviewerComment",
+      "comment",
+      "comments"
+    );
+
   if (!programme) {
     return sendJson(res, 400, {
       ok: false,
@@ -855,8 +1075,29 @@ async function approveNote(
     });
   }
 
+  /*
+   * Resolve the class to an actual Airtable
+   * Classes record.
+   */
+  const classRecord =
+    await findClassRecord(
+      targetClass
+    );
+
+  if (!classRecord) {
+    return sendJson(res, 400, {
+      ok: false,
+      success: false,
+      error:
+        "Target Class could not be resolved.",
+    });
+  }
+
   const resolvedNoteId =
     noteIdFromRecord(note);
+
+  const resolvedClassId =
+    classRecord.id;
 
   /*
    * Update approval record.
@@ -868,9 +1109,12 @@ async function approveNote(
 
   const approvalFields = {
     Status: "Approved",
-    Decision: "Approved",
-    "Reviewed At":
+
+    "Review Date":
       new Date().toISOString(),
+
+    "Reviewer Comments":
+      reviewComment || "",
   };
 
   if (reviewerId) {
@@ -893,7 +1137,8 @@ async function approveNote(
         APPROVALS_TABLE,
         {
           ...approvalFields,
-          "Note ID": resolvedNoteId,
+          Note:
+            [resolvedNoteId],
         }
       );
   }
@@ -902,27 +1147,38 @@ async function approveNote(
    * Publication-specific fields belong in
    * NoteBank_Publications, not NoteBank_Notes.
    */
+  const version =
+    note?.fields?.Version || 1;
+
   const publication =
     await findPublicationForNote(
-      resolvedNoteId
+      resolvedNoteId,
+      version
     );
 
   const publicationFields = {
     Status: "Published",
 
+    Note:
+      [resolvedNoteId],
+
+    Version:
+      version,
+
     "Target Programme":
       programme,
 
     "Target Class":
-      targetClass,
+      [resolvedClassId],
 
-    "Published At":
+    "Publish Date":
       new Date().toISOString(),
   };
 
   if (reviewerId) {
-    publicationFields["Published By"] =
-      reviewerId;
+    publicationFields[
+      "Published By"
+    ] = reviewerId;
   }
 
   let savedPublication;
@@ -938,10 +1194,7 @@ async function approveNote(
     savedPublication =
       await airtableCreate(
         PUBLICATIONS_TABLE,
-        {
-          ...publicationFields,
-          "Note ID": resolvedNoteId,
-        }
+        publicationFields
       );
   }
 
@@ -949,13 +1202,36 @@ async function approveNote(
    * Only after approval/publication succeeds,
    * mark the NoteBank note as Published.
    */
+  const publicationTimestamp =
+    new Date().toISOString();
+
+  const notePublicationFields = {
+    Status: "Published",
+
+    "Approved Date":
+      publicationTimestamp,
+
+    "Published Date":
+      publicationTimestamp,
+
+    "Updated Date":
+      publicationTimestamp,
+
+    "Review Comment":
+      reviewComment || "",
+  };
+
+  if (reviewerId) {
+    notePublicationFields[
+      "Approved By"
+    ] = reviewerId;
+  }
+
   const updatedNote =
     await airtableUpdate(
       NOTES_TABLE,
       note.id,
-      {
-        Status: "Published",
-      }
+      notePublicationFields
     );
 
   return sendJson(res, 200, {
@@ -983,7 +1259,8 @@ async function requestChanges(
   body,
   authenticatedUser
 ) {
-  const noteId = getNoteId(null, body);
+  const noteId =
+    getNoteId(null, body);
 
   if (!noteId) {
     return sendJson(res, 400, {
@@ -1011,7 +1288,8 @@ async function requestChanges(
     });
   }
 
-  const note = await findNote(noteId);
+  const note =
+    await findNote(noteId);
 
   if (!note) {
     return sendJson(res, 404, {
@@ -1034,12 +1312,15 @@ async function requestChanges(
     );
 
   const approvalFields = {
-    Status: "Changes Requested",
-    Decision: "Changes Requested",
-    Comments: comment,
-    "Reviewed At":
-      new Date().toISOString(),
-  };
+  Status:
+    "Changes Requested",
+
+  "Review Date":
+    new Date().toISOString(),
+
+  "Reviewer Comments":
+    comment || "",
+};
 
   if (reviewerId) {
     approvalFields.Reviewer =
@@ -1061,7 +1342,8 @@ async function requestChanges(
         APPROVALS_TABLE,
         {
           ...approvalFields,
-          "Note ID": resolvedNoteId,
+          Note:
+            [resolvedNoteId],
         }
       );
   }
@@ -1070,9 +1352,13 @@ async function requestChanges(
    * If a publication already exists, make it
    * unavailable while changes are being made.
    */
+  const version =
+    note?.fields?.Version || 1;
+
   const existingPublication =
     await findPublicationForNote(
-      resolvedNoteId
+      resolvedNoteId,
+      version
     );
 
   if (existingPublication) {
@@ -1080,7 +1366,8 @@ async function requestChanges(
       PUBLICATIONS_TABLE,
       existingPublication.id,
       {
-        Status: "Unpublished",
+        Status:
+          "Unpublished",
       }
     );
   }
@@ -1090,7 +1377,8 @@ async function requestChanges(
       NOTES_TABLE,
       note.id,
       {
-        Status: "Changes Requested",
+        Status:
+          "Changes Requested",
       }
     );
 
@@ -1130,12 +1418,14 @@ export default async function handler(
 
   if (req.method !== "GET") {
     try {
-      body = await readBody(req);
+      body =
+        await readBody(req);
     } catch {
       return sendJson(res, 400, {
         ok: false,
         success: false,
-        error: "Invalid JSON body",
+        error:
+          "Invalid JSON body",
       });
     }
   }
@@ -1149,12 +1439,17 @@ export default async function handler(
    * GET:
    * reviewer/admin only.
    */
-  if (req.method === "GET") {
+  if (
+    req.method === "GET"
+  ) {
     authenticatedUser =
       requireRole(
         req,
         res,
-        ["reviewer", "admin"]
+        [
+          "reviewer",
+          "admin",
+        ]
       );
   }
 
@@ -1169,7 +1464,10 @@ export default async function handler(
       requireRole(
         req,
         res,
-        ["reviewer", "admin"]
+        [
+          "reviewer",
+          "admin",
+        ]
       );
   }
 
@@ -1188,7 +1486,10 @@ export default async function handler(
       requireRole(
         req,
         res,
-        ["reviewer", "admin"]
+        [
+          "reviewer",
+          "admin",
+        ]
       );
   }
 
@@ -1206,7 +1507,10 @@ export default async function handler(
       requireRole(
         req,
         res,
-        ["teacher", "admin"]
+        [
+          "teacher",
+          "admin",
+        ]
       );
   }
 
@@ -1231,9 +1535,14 @@ export default async function handler(
     /*
      * GET operations.
      */
-    if (req.method === "GET") {
+    if (
+      req.method === "GET"
+    ) {
       const noteId =
-        getNoteId(req, body);
+        getNoteId(
+          req,
+          body
+        );
 
       if (noteId) {
         return getSingleReview(
@@ -1252,7 +1561,9 @@ export default async function handler(
       if (
         list === "classes"
       ) {
-        return listClasses(res);
+        return listClasses(
+          res
+        );
       }
 
       if (
@@ -1260,7 +1571,9 @@ export default async function handler(
         list === "queue" ||
         !list
       ) {
-        return listReviewQueue(res);
+        return listReviewQueue(
+          res
+        );
       }
 
       return sendJson(res, 400, {
@@ -1274,7 +1587,9 @@ export default async function handler(
     /*
      * Teacher saves draft.
      */
-    if (action === "save") {
+    if (
+      action === "save"
+    ) {
       return saveDraft(
         res,
         body,
@@ -1285,7 +1600,9 @@ export default async function handler(
     /*
      * Teacher submits note for review.
      */
-    if (action === "submit") {
+    if (
+      action === "submit"
+    ) {
       return submitForReview(
         res,
         body,
@@ -1296,7 +1613,9 @@ export default async function handler(
     /*
      * Reviewer approves and publishes.
      */
-    if (action === "approve") {
+    if (
+      action === "approve"
+    ) {
       return approveNote(
         res,
         body,
@@ -1324,7 +1643,8 @@ export default async function handler(
     return sendJson(res, 400, {
       ok: false,
       success: false,
-      error: "Unsupported action",
+      error:
+        "Unsupported action",
     });
   } catch (error) {
     console.error(

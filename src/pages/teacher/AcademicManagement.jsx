@@ -77,6 +77,22 @@ export default function AcademicManagement() {
 
   useEffect(() => { load(); }, []);
 
+useEffect(() => {
+  if (
+    aiResult?.type !== "Note" ||
+    !aiResult?.note ||
+    !window.AINoteVisuals ||
+    typeof window.AINoteVisuals.mount !== "function"
+  ) {
+    return;
+  }
+
+  window.AINoteVisuals.mount({
+    ...aiResult.raw,
+    note: editedNote || normaliseNote(aiResult.note),
+  });
+}, [aiResult, editedNote]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return records.filter((r) => (tab === "All" || r.type === tab) && (!q || `${r.type} ${r.name} ${r.code} ${r.programme} ${r.className} ${r.subject} ${r.teacher}`.toLowerCase().includes(q)));
